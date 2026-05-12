@@ -216,43 +216,51 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          # افزایش بافر برای انتقال فایل‌های بزرگ
+          git config http.postBuffer 157286400
 
-      - name: Commit and Push all chunks
+      - name: Commit and Push each chunk one by one
         run: |
           FOLDER="${{ steps.process_files.outputs.folder }}"
 
-          echo "Adding files from ${FOLDER}..."
-          git add "${FOLDER}/"*.7z* 2>/dev/null || true
+          echo "Adding and pushing files from ${FOLDER} one by one..."
 
-          if ! git diff --staged --quiet; then
-            file_count=$(git diff --staged --name-only | wc -l)
-            git commit -m "Add ${{ steps.process_files.outputs.processed_count }} file(s) in ${FOLDER} (${file_count} chunks)"
-            echo "Committed $file_count files."
+          total_files=$(ls "${FOLDER}"/*.7z* 2>/dev/null | wc -l)
 
-            push_success=false
-            max_attempts=15
-
-            for attempt in $(seq 1 $max_attempts); do
-              echo "Push attempt $attempt of $max_attempts..."
-              git pull --rebase origin main 2>/dev/null || true
-
-              if git push origin main; then
-                echo "Push successful on attempt $attempt."
-                push_success=true
-                break
-              else
-                echo "Push failed. Retrying in 20 seconds..."
-                sleep 20
-              fi
-            done
-
-            if [ "$push_success" = false ]; then
-              echo "Push failed after $max_attempts attempts."
-              exit 1
-            fi
-          else
-            echo "No files to commit."
+          if [ "$total_files" -eq 0 ]; then
+            echo "No chunk files found."
+            exit 1
           fi
+
+          file_index=0
+          push_success=true
+
+          for chunk in "${FOLDER}"/*.7z*; do
+            file_index=$((file_index + 1))
+            echo "------------------------------------------------"
+            echo "[$file_index/$total_files] Pushing: $(basename "$chunk")"
+
+            git add "$chunk"
+            git commit -m "Add chunk $(basename "$chunk") [${file_index}/${total_files}]"
+
+            # Pull any changes from remote (only if something exists)
+            git pull --rebase origin main 2>/dev/null || true
+
+            if git push origin main; then
+              echo "Chunk $file_index pushed successfully."
+            else
+              echo "Failed to push chunk $file_index. Aborting."
+              push_success=false
+              break
+            fi
+          done
+
+          if [ "$push_success" = false ]; then
+            echo "One or more chunks failed to push."
+            exit 1
+          fi
+
+          echo "All chunks pushed."
 
       - name: Summary
         run: |
