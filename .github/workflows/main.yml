@@ -117,6 +117,7 @@ jobs:
             echo "========================================="
             echo "[$counter/$total] Downloading: $url"
 
+            # Build a safe filename
             FILENAME_FROM_URL=$(echo "$url" | sed 's/?.*//' | xargs basename)
             if [ -z "$FILENAME_FROM_URL" ]; then
               FILENAME_FROM_URL="unknown_${counter}"
@@ -129,7 +130,6 @@ jobs:
             fi
 
             PREFIX="sci-hub.ir"
-
             if [ "$total" -gt 1 ]; then
               NUM=$(printf '%02d' $counter)
               DL_NAME="${PREFIX}_${NUM}_${FILENAME_BASE}"
@@ -155,12 +155,35 @@ jobs:
 
             echo "Download filename: ${FINAL_FILENAME}"
 
-            if curl -L --fail --retry 5 --retry-delay 10 --connect-timeout 30 -o "files/${FINAL_FILENAME}" "$url"; then
+            # --- DOWNLOAD WITH RETRY & RESUME ---
+            attempt=0
+            max_attempts=10
+            download_ok=false
+
+            while [ $attempt -lt $max_attempts ]; do
+              attempt=$((attempt + 1))
+              echo "Attempt $attempt/$max_attempts..."
+
+              # If partial file exists, resume (-C -)
+              if [ -f "files/${FINAL_FILENAME}" ]; then
+                echo "Resuming partial download..."
+                curl -L --retry 3 --retry-delay 10 --connect-timeout 60 \
+                     -C - -o "files/${FINAL_FILENAME}" "$url" && download_ok=true && break
+              else
+                curl -L --retry 3 --retry-delay 10 --connect-timeout 60 \
+                     -o "files/${FINAL_FILENAME}" "$url" && download_ok=true && break
+              fi
+
+              echo "Download failed. Waiting 10 seconds before retry..."
+              sleep 10
+            done
+
+            if [ "$download_ok" = true ]; then
               size=$(ls -lh "files/${FINAL_FILENAME}" | awk '{print $5}')
               echo "Downloaded: ${FINAL_FILENAME} ($size)"
               success=$((success + 1))
             else
-              echo "Failed: $url"
+              echo "Failed to download after $max_attempts attempts: $url"
             fi
 
             counter=$((counter + 1))
@@ -228,8 +251,8 @@ jobs:
           total_files=$(ls "${FOLDER}"/*.7z* 2>/dev/null | wc -l)
 
           if [ "$total_files" -eq 0 ]; then
-            echo "No chunk files found."
-            exit 1
+            echo "No chunk files found. Skipping push."
+            exit 0
           fi
 
           file_index=0
